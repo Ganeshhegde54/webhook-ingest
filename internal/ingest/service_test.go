@@ -133,5 +133,59 @@ func TestConcurrentDuplicateDeliveryIsIgnored(t *testing.T) {
 	}
 }
 
+func TestConcurrentAccountStatsProcessing(t *testing.T) {
+	st := testutil.NewStore(t)
+	_, _, accountID := testutil.IDs(t, st)
+	ctx := context.Background()
+
+	cache := stats.NewCache()
+	svc := ingest.New(st, cache, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	const numCalls = 30
+	const callDuration = 10
+	var wg sync.WaitGroup
+	wg.Add(numCalls)
+
+	start := make(chan struct{})
+	for i := 0; i < numCalls; i++ {
+		callIdx := i
+		go func() {
+			defer wg.Done()
+			<-start
+			evt := ingest.Event{
+				EventID:      fmt.Sprintf("evt_%s_%d", accountID, callIdx),
+				CallID:       fmt.Sprintf("call_%s_%d", accountID, callIdx),
+				AccountID:    accountID,
+				Status:       "completed",
+				DurationSec:  callDuration,
+				RecordingURL: "",
+				OccurredAt:   time.Now(),
+			}
+			if err := svc.Ingest(ctx, evt); err != nil {
+				t.Errorf("Ingest: %v", err)
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	// Verify in-memory cache
+	cached := cache.Get(accountID)
+	if cached.CallCount != int64(numCalls) || cached.TotalDurationSec != int64(numCalls*callDuration) {
+		t.Fatalf("cache: got %+v, want CallCount=%d TotalDurationSec=%d", cached, numCalls, numCalls*callDuration)
+	}
+
+	// Verify database account_stats
+	dbStats, err := st.AccountStats(ctx, accountID)
+	if err != nil {
+		t.Fatalf("AccountStats: %v", err)
+	}
+	if dbStats.CallCount != int64(numCalls) || dbStats.TotalDurationSec != int64(numCalls*callDuration) {
+		t.Fatalf("db stats: got %+v, want CallCount=%d TotalDurationSec=%d", dbStats, numCalls, numCalls*callDuration)
+	}
+}
+
+
 
 
