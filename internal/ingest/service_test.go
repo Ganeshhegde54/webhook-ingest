@@ -186,6 +186,34 @@ func TestConcurrentAccountStatsProcessing(t *testing.T) {
 	}
 }
 
+func TestRecordingProcessedAfterHTTPRequest(t *testing.T) {
+	srv, st := testutil.NewServer(t)
+	eventID, callID, accountID := testutil.IDs(t, st)
+	ctx := context.Background()
+
+	body := eventJSON(eventID, callID, accountID)
+	resp := post(t, srv.URL+"/webhooks/calls", body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("got %d, want 200", resp.StatusCode)
+	}
+
+	// Poll until recording_processed is true or timeout after 500ms
+	deadline := time.Now().Add(500 * time.Millisecond)
+	var processed bool
+	for time.Now().Before(deadline) {
+		row := st.Pool().QueryRow(ctx, `SELECT recording_processed FROM calls WHERE call_id = $1`, callID)
+		if err := row.Scan(&processed); err == nil && processed {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if !processed {
+		t.Fatalf("recording was not marked processed for call %s after HTTP request finished", callID)
+	}
+}
+
+
 
 
 
