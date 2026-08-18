@@ -3,10 +3,16 @@ package ingest_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/convin/webhook-ingest/internal/ingest"
+	"github.com/convin/webhook-ingest/internal/stats"
 	"github.com/convin/webhook-ingest/internal/testutil"
 )
 
@@ -82,3 +88,50 @@ func TestDuplicateDeliveryIsIgnored(t *testing.T) {
 		t.Fatalf("stored %d copies of %s, want 1", n, eventID)
 	}
 }
+
+func TestConcurrentDuplicateDeliveryIsIgnored(t *testing.T) {
+	st := testutil.NewStore(t)
+	eventID, callID, accountID := testutil.IDs(t, st)
+	ctx := context.Background()
+
+	svc := ingest.New(st, stats.NewCache(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	evt := ingest.Event{
+		EventID:      eventID,
+		CallID:       callID,
+		AccountID:    accountID,
+		Status:       "completed",
+		DurationSec:  10,
+		RecordingURL: "",
+		OccurredAt:   time.Now(),
+	}
+
+	const concurrency = 50
+	var wg sync.WaitGroup
+	wg.Add(concurrency)
+
+	start := make(chan struct{})
+	for i := 0; i < concurrency; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			if err := svc.Ingest(ctx, evt); err != nil {
+				t.Errorf("Ingest: %v", err)
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+
+	var count int
+	row := st.Pool().QueryRow(ctx, `SELECT count(*) FROM events WHERE event_id = $1`, eventID)
+	if err := row.Scan(&count); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("stored %d copies of %s, want 1", count, eventID)
+	}
+}
+
+
+
