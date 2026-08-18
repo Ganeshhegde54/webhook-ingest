@@ -19,3 +19,22 @@ Added `TestConcurrentDuplicateDeliveryIsIgnored` in `internal/ingest/service_tes
 ### Verification
 - `go test ./...` passed.
 - `go test -race ./...` (via Docker `golang:1.25`) passed without race warnings.
+
+## 2. Account Call Counts Concurrency
+
+### Problem
+Account call counts and aggregate statistics drift or become corrupted under concurrent webhook deliveries for the same account.
+
+### Root Cause
+`Cache.Record` in `internal/stats/cache.go` mutated the internal map `m` and individual pointer values (`s.CallCount`, `s.TotalDurationSec`) without acquiring a mutex lock. Concurrent requests caused data races, lost increments, and map corruption.
+
+### Fix
+Added `c.mu.Lock()` and `defer c.mu.Unlock()` to `Cache.Record` in `internal/stats/cache.go` to synchronize all map lookups and counter modifications.
+
+### Test
+1. Added `TestCacheConcurrentRecord` in `internal/stats/cache_test.go` to test 100 concurrent record operations on the same account.
+2. Added `TestConcurrentAccountStatsProcessing` in `internal/ingest/service_test.go` to verify end-to-end ingestion and accurate totals in both memory cache and PostgreSQL.
+
+### Verification
+- `go test ./...` passed.
+- `go test -race ./...` (via Docker `golang:1.25`) passed with zero race warnings.
