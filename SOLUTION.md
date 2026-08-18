@@ -38,3 +38,21 @@ Added `c.mu.Lock()` and `defer c.mu.Unlock()` to `Cache.Record` in `internal/sta
 ### Verification
 - `go test ./...` passed.
 - `go test -race ./...` (via Docker `golang:1.25`) passed with zero race warnings.
+
+## 3. Unprocessed Call Recordings
+
+### Problem
+Calls landed in the system and were saved in the `calls` table, but their recordings were never marked processed (`recording_processed` stayed `false`).
+
+### Root Cause
+The asynchronous background goroutine executing `s.processRecording(ctx, rec)` was passed `ctx` directly from the incoming HTTP request context (`r.Context()`). As soon as the HTTP handler returned `200 OK`, `net/http` canceled `r.Context()`. When `processRecording` attempted to update the database after its simulated processing sleep (`time.Sleep(50ms)`), `pgxpool` immediately aborted with `context canceled`.
+
+### Fix
+Decoupled background recording processing from the transient HTTP request lifecycle by passing `context.Background()` to `processRecording` inside the asynchronous goroutine in `internal/ingest/service.go`.
+
+### Test
+Added `TestRecordingProcessedAfterHTTPRequest` in `internal/ingest/service_test.go`, which delivers a webhook with a `recording_url` via HTTP, verifies the immediate HTTP 200 response, and verifies that `recording_processed` transitions to `true` in PostgreSQL.
+
+### Verification
+- `go test ./...` passed.
+- `go test -race ./...` (via Docker `golang:1.25`) passed with zero race warnings.
