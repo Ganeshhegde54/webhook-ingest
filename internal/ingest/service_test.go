@@ -1,6 +1,7 @@
 package ingest_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -212,6 +213,44 @@ func TestRecordingProcessedAfterHTTPRequest(t *testing.T) {
 		t.Fatalf("recording was not marked processed for call %s after HTTP request finished", callID)
 	}
 }
+
+func TestRecordingProcessingErrorIsLogged(t *testing.T) {
+	st := testutil.NewStore(t)
+	eventID, callID, accountID := testutil.IDs(t, st)
+	ctx := context.Background()
+
+	stErr := testutil.NewStore(t)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+	svc := ingest.New(stErr, stats.NewCache(), nil, logger)
+
+	evt := ingest.Event{
+		EventID:      eventID,
+		CallID:       callID,
+		AccountID:    accountID,
+		Status:       "completed",
+		DurationSec:  10,
+		RecordingURL: "https://example.com/audio.wav",
+		OccurredAt:   time.Now(),
+	}
+
+	if err := svc.Ingest(ctx, evt); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	// Close secondary store to force processRecording to fail
+	stErr.Close()
+
+	// Wait for processRecording to run and attempt to log
+	time.Sleep(100 * time.Millisecond)
+
+	logs := logBuf.String()
+	if !strings.Contains(logs, "level=ERROR") || !strings.Contains(logs, callID) {
+		t.Fatalf("expected error log containing level=ERROR and call_id %q, got logs: %q", callID, logs)
+	}
+}
+
+
 
 
 
