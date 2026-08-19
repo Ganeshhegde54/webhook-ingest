@@ -75,3 +75,24 @@ Added `TestRecordingProcessingErrorIsLogged` in `internal/ingest/service_test.go
 ### Verification
 - `go test ./...` passed.
 - `go test -race ./...` (via Docker `golang:1.25`) passed with zero race warnings.
+
+## 5. In-Flight Recording Work Lost During Shutdown
+
+### Problem
+When the server received `SIGTERM` (e.g., during a rolling deployment), recording work that had already been started was silently dropped, leaving calls with `recording_processed = false` permanently.
+
+### Root Cause
+`Service.Ingest` spawned background goroutines with `go func()` but the `Service` struct had no `sync.WaitGroup` to track them. `main.go` called `srv.Shutdown` (which only drains HTTP connections) and then returned immediately, killing the process while goroutines inside `processRecording` were still sleeping or waiting for the database. There was no mechanism to wait for in-flight work to complete before exit.
+
+### Fix
+1. Added a `sync.WaitGroup wg` field to `Service` in `internal/ingest/service.go`.
+2. Before each background goroutine is spawned, `s.wg.Add(1)` is called; `defer s.wg.Done()` is placed inside the goroutine so it always decrements on exit.
+3. Added a `Wait()` method on `Service` that calls `s.wg.Wait()`.
+4. In `cmd/server/main.go`, after `srv.Shutdown` returns (HTTP connections drained), `svc.Wait()` is called to block until all recording goroutines finish.
+
+### Test
+Added `TestInFlightRecordingNotLostOnShutdown` in `internal/ingest/service_test.go`, which ingests a call with a `recording_url`, immediately calls `svc.Wait()` (simulating shutdown while processing is still running), and asserts that `recording_processed` is `true` in PostgreSQL after `Wait()` returns.
+
+### Verification
+- `go test ./...` passed.
+- `go test -race ./...` (via Docker `golang:1.25`) passed with zero race warnings.

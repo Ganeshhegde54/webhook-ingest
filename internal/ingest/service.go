@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -22,6 +23,7 @@ type Service struct {
 	cache *stats.Cache
 	rdb   *redis.Client
 	log   *slog.Logger
+	wg    sync.WaitGroup
 }
 
 // New builds a Service.
@@ -32,6 +34,13 @@ func New(s *store.Store, c *stats.Cache, rdb *redis.Client, log *slog.Logger) *S
 // Stats returns the cached totals for an account.
 func (s *Service) Stats(accountID string) stats.AccountStats {
 	return s.cache.Get(accountID)
+}
+
+// Wait blocks until all background recording goroutines have finished.
+// Call this during graceful shutdown after the HTTP server has stopped
+// accepting new requests.
+func (s *Service) Wait() {
+	s.wg.Wait()
 }
 
 // Ingest stores a delivery and kicks off processing. Processing runs
@@ -70,7 +79,9 @@ func (s *Service) Ingest(ctx context.Context, evt Event) error {
 
 	// Recordings are slow to fetch, so that part does not block the provider.
 	if rec.RecordingURL != "" {
+		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
 			if err := s.processRecording(context.Background(), rec); err != nil {
 				s.log.Error("process recording failed", "call_id", rec.CallID, "account_id", rec.AccountID, "err", err)
 			}
@@ -86,3 +97,4 @@ func (s *Service) processRecording(ctx context.Context, rec store.Event) error {
 	time.Sleep(recordingWork)
 	return s.store.MarkRecordingProcessed(ctx, rec.CallID)
 }
+
