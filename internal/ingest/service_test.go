@@ -267,7 +267,40 @@ func TestRecordingProcessingErrorIsLogged(t *testing.T) {
 	}
 }
 
+func TestInFlightRecordingNotLostOnShutdown(t *testing.T) {
+	st := testutil.NewStore(t)
+	eventID, callID, accountID := testutil.IDs(t, st)
+	ctx := context.Background()
 
+	svc := ingest.New(st, stats.NewCache(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	evt := ingest.Event{
+		EventID:      eventID,
+		CallID:       callID,
+		AccountID:    accountID,
+		Status:       "completed",
+		DurationSec:  10,
+		RecordingURL: "https://example.com/audio.wav",
+		OccurredAt:   time.Now(),
+	}
+
+	if err := svc.Ingest(ctx, evt); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	// Simulate server shutdown while processRecording (50ms sleep) is still running.
+	// Wait() must block until all goroutines finish.
+	svc.Wait()
+
+	var processed bool
+	row := st.Pool().QueryRow(ctx, `SELECT recording_processed FROM calls WHERE call_id = $1`, callID)
+	if err := row.Scan(&processed); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if !processed {
+		t.Fatalf("recording was lost during shutdown: recording_processed is still false for call %s", callID)
+	}
+}
 
 
 
