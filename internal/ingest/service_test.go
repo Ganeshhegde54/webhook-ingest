@@ -214,13 +214,30 @@ func TestRecordingProcessedAfterHTTPRequest(t *testing.T) {
 	}
 }
 
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *safeBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *safeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
 func TestRecordingProcessingErrorIsLogged(t *testing.T) {
 	st := testutil.NewStore(t)
 	eventID, callID, accountID := testutil.IDs(t, st)
 	ctx := context.Background()
 
 	stErr := testutil.NewStore(t)
-	var logBuf bytes.Buffer
+	var logBuf safeBuffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
 	svc := ingest.New(stErr, stats.NewCache(), nil, logger)
 
@@ -249,6 +266,7 @@ func TestRecordingProcessingErrorIsLogged(t *testing.T) {
 		t.Fatalf("expected error log containing level=ERROR and call_id %q, got logs: %q", callID, logs)
 	}
 }
+
 
 
 

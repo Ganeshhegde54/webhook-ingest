@@ -72,7 +72,7 @@ func (s *Service) Ingest(ctx context.Context, evt Event) error {
 	if rec.RecordingURL != "" {
 		go func() {
 			if err := s.processRecording(context.Background(), rec); err != nil {
-				// TODO: handle
+				s.log.Error("process recording failed", "call_id", rec.CallID, "account_id", rec.AccountID, "err", err)
 			}
 		}()
 	}

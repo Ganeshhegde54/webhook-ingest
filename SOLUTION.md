@@ -56,3 +56,22 @@ Added `TestRecordingProcessedAfterHTTPRequest` in `internal/ingest/service_test.
 ### Verification
 - `go test ./...` passed.
 - `go test -race ./...` (via Docker `golang:1.25`) passed with zero race warnings.
+
+## 4. Recording Processing Failure Logging
+
+### Problem
+When recording processing failed (due to network/database connectivity or context timeouts), no errors appeared in the service logs, making background failures completely invisible to operators.
+
+### Root Cause
+In `internal/ingest/service.go`, the background goroutine executing `s.processRecording` had an empty error handling block (`// TODO: handle`), discarding returned errors silently.
+
+### Fix
+Replaced the empty error block with structured error logging using the service's logger:
+`s.log.Error("process recording failed", "call_id", rec.CallID, "account_id", rec.AccountID, "err", err)`.
+
+### Test
+Added `TestRecordingProcessingErrorIsLogged` in `internal/ingest/service_test.go`, which forces a recording processing failure by terminating the database pool and asserts that an `ERROR` entry with the corresponding `call_id` is emitted.
+
+### Verification
+- `go test ./...` passed.
+- `go test -race ./...` (via Docker `golang:1.25`) passed with zero race warnings.
